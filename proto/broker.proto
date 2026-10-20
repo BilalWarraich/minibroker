@@ -1,0 +1,46 @@
+syntax = "proto3";
+
+package minibroker.v1;
+
+option go_package = "github.com/BilalWarraich/minibroker/gen/brokerpb";
+
+service Broker {
+  rpc Publish(PublishRequest) returns (PublishResponse);
+  // Subscribe streams messages for a topic until the client goes away
+  // or the server kicks it for being too slow.
+  rpc Subscribe(SubscribeRequest) returns (stream Message);
+  rpc ListTopics(ListTopicsRequest) returns (ListTopicsResponse);
+}
+
+message PublishRequest {
+  string topic = 1;
+  bytes data = 2;
+}
+
+message PublishResponse {
+  uint64 id = 1;
+  int32 delivered = 2;
+  int32 dropped = 3;
+}
+
+message SubscribeRequest {
+  string topic = 1;
+}
+
+message Message {
+  uint64 id = 1;
+  string topic = 2;
+  bytes data = 3;
+  int64 published_at_unix_ms = 4;
+}
+
+message ListTopicsRequest {}
+
+message TopicInfo {
+  string name = 1;
+  int32 subscribers = 2;
+}
+
+message ListTopicsResponse {
+  repeated TopicInfo topics = 1;
+}
