@@ -25,6 +25,11 @@ func main() {
 	maxDrops := flag.Int("max-drops", 100, "kick a subscriber after this many dropped messages in a row")
 	flag.Parse()
 
+	// koyeb / cloud run etc. tell us the port through env
+	if port := os.Getenv("PORT"); port != "" {
+		*addr = ":" + port
+	}
+
 	token := os.Getenv("MINIBROKER_TOKEN")
 
 	lis, err := net.Listen("tcp", *addr)

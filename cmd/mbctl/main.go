@@ -7,6 +7,7 @@ package main
 
 import (
 	"context"
+	"crypto/tls"
 	"flag"
 	"fmt"
 	"io"
@@ -18,12 +19,14 @@ import (
 
 	"github.com/BilalWarraich/minibroker/gen/brokerpb"
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/credentials"
 	"google.golang.org/grpc/credentials/insecure"
 	"google.golang.org/grpc/metadata"
 )
 
 func main() {
 	addr := flag.String("addr", "localhost:50051", "broker address")
+	useTLS := flag.Bool("tls", false, "use tls (needed for hosted brokers, e.g. something.koyeb.app:443)")
 	flag.Usage = func() {
 		fmt.Fprintln(os.Stderr, "usage: mbctl [-addr host:port] pub <topic> <msg> | sub <topic> | topics")
 		flag.PrintDefaults()
@@ -35,7 +38,11 @@ func main() {
 		os.Exit(2)
 	}
 
-	conn, err := grpc.NewClient(*addr, grpc.WithTransportCredentials(insecure.NewCredentials()))
+	creds := insecure.NewCredentials()
+	if *useTLS {
+		creds = credentials.NewTLS(&tls.Config{})
+	}
+	conn, err := grpc.NewClient(*addr, grpc.WithTransportCredentials(creds))
 	if err != nil {
 		log.Fatal(err)
 	}
