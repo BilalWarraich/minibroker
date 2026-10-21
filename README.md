@@ -5,6 +5,12 @@ I just wanted to understand how fan-out and backpressure work by building one.
 
 Publishers send messages to a topic, subscribers get them through a gRPC server stream.
 
+![demo](docs/demo.gif)
+
+*Top left: the broker. Right: two subscribers (alice, bob) on `orders`. Bottom left: publishing,
+including a burst of 5 concurrent publishes. Then bob disconnects and gets cleaned up, and on
+ctrl+c the broker shuts down gracefully and tells the remaining subscriber why.*
+
 ```
   pub ──► Publish(topic) ──► broker ──┬──► sub chan (buffered) ──► Subscribe stream ──► client A
                                       ├──► sub chan (buffered) ──► Subscribe stream ──► client B
@@ -63,26 +69,11 @@ grpcurl -plaintext localhost:50051 grpc.health.v1.Health/Check
 
 Flags: `-addr` (`:50051`), `-buffer` per-subscriber buffer (64), `-max-drops` (100).
 
-## Deploying (Koyeb free tier)
+## Deploying
 
-Koyeb's free instance supports HTTP/2, which grpc needs.
-
-1. Koyeb dashboard -> Create Web Service -> GitHub -> this repo
-2. Builder: Dockerfile
-3. Ports: keep 8000 but set the protocol to **HTTP/2** (plain HTTP won't work for grpc)
-4. Env: set `MINIBROKER_TOKEN` to something random, otherwise anyone can publish to it
-5. Health check: TCP is fine
-
-Then from your machine:
-
-```
-export MINIBROKER_TOKEN=<same token>
-go run ./cmd/mbctl -tls -addr <your-app>.koyeb.app:443 sub chat
-go run ./cmd/mbctl -tls -addr <your-app>.koyeb.app:443 pub chat hi from the internet
-```
-
-Free instances scale to zero when idle so the first call can be slow, and subscriptions
-get dropped whenever the instance restarts. Fine for a demo.
+Not hosted anywhere right now. grpc needs HTTP/2 all the way through, which most free tiers
+don't do. Google Cloud Run supports it (set `MINIBROKER_TOKEN`, it reads `PORT` already),
+then connect with `mbctl -tls -addr <service>.run.app:443 ...`.
 
 ## Regenerating the proto code
 
