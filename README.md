@@ -63,6 +63,27 @@ grpcurl -plaintext localhost:50051 grpc.health.v1.Health/Check
 
 Flags: `-addr` (`:50051`), `-buffer` per-subscriber buffer (64), `-max-drops` (100).
 
+## Deploying (Koyeb free tier)
+
+Koyeb's free instance supports HTTP/2, which grpc needs.
+
+1. Koyeb dashboard -> Create Web Service -> GitHub -> this repo
+2. Builder: Dockerfile
+3. Ports: keep 8000 but set the protocol to **HTTP/2** (plain HTTP won't work for grpc)
+4. Env: set `MINIBROKER_TOKEN` to something random, otherwise anyone can publish to it
+5. Health check: TCP is fine
+
+Then from your machine:
+
+```
+export MINIBROKER_TOKEN=<same token>
+go run ./cmd/mbctl -tls -addr <your-app>.koyeb.app:443 sub chat
+go run ./cmd/mbctl -tls -addr <your-app>.koyeb.app:443 pub chat hi from the internet
+```
+
+Free instances scale to zero when idle so the first call can be slow, and subscriptions
+get dropped whenever the instance restarts. Fine for a demo.
+
 ## Regenerating the proto code
 
 Generated code is committed so you don't need protoc just to build. If you change `proto/broker.proto`:
