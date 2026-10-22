@@ -1,5 +1,7 @@
 # minibroker
 
+[![ci](https://github.com/BilalWarraich/minibroker/actions/workflows/ci.yml/badge.svg)](https://github.com/BilalWarraich/minibroker/actions/workflows/ci.yml)
+
 A tiny pub/sub message broker over gRPC. Not trying to compete with NATS or Kafka,
 I just wanted to understand how fan-out and backpressure work by building one.
 
