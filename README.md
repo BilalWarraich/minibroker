@@ -36,6 +36,22 @@ Also has:
 
 No persistence, no acks, at-most-once delivery. Messages published to a topic with no subscribers are just gone.
 
+## Performance
+
+Each topic has its own lock, the broker-wide lock is only held for reading during `Publish`
+(to look the topic up). Before that it was one global mutex for everything, so publishers on
+completely different topics were waiting on each other.
+
+`go test -bench . ./internal/broker/`, 4 cores, 2 drained subscribers per topic:
+
+| benchmark | global lock | per-topic lock |
+|---|---|---|
+| 16 topics, parallel publishers | ~515 ns/op | ~194 ns/op (~2.7x) |
+| 1 topic, parallel publishers | ~495 ns/op | ~470 ns/op (same) |
+
+The single-topic case doesn't improve, which makes sense, everyone still fights over the
+same topic lock. Fixing that would mean something like copy-on-write subscriber lists.
+
 ## Running
 
 ```
@@ -98,4 +114,3 @@ make test
 - wildcard topics (`orders.*`)
 - replay last N messages for new subscribers
 - metrics (msgs/sec, drops per topic)
-- shard the lock per topic, right now Publish takes a global lock
