@@ -30,6 +30,9 @@ func (s *Server) Publish(ctx context.Context, req *brokerpb.PublishRequest) (*br
 	}
 
 	msg, delivered, dropped, err := s.b.Publish(req.GetTopic(), req.GetData())
+	if errors.Is(err, broker.ErrWildcardInPub) {
+		return nil, status.Error(codes.InvalidArgument, err.Error())
+	}
 	if errors.Is(err, broker.ErrClosed) {
 		return nil, status.Error(codes.Unavailable, "shutting down")
 	}
@@ -49,6 +52,9 @@ func (s *Server) Subscribe(req *brokerpb.SubscribeRequest, stream brokerpb.Broke
 	}
 
 	sub, err := s.b.Subscribe(req.GetTopic())
+	if errors.Is(err, broker.ErrBadPattern) {
+		return status.Error(codes.InvalidArgument, "bad pattern, wildcards (* or >) must be whole tokens and > only at the end")
+	}
 	if err != nil {
 		return status.Error(codes.Unavailable, "shutting down")
 	}

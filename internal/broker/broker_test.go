@@ -142,3 +142,57 @@ func TestConcurrentPublishSubscribe(t *testing.T) {
 	b.Close()
 	wg.Wait()
 }
+
+func TestWildcardSubscribe(t *testing.T) {
+	b := New(Options{})
+	one, _ := b.Subscribe("orders.*")
+	all, _ := b.Subscribe("orders.>")
+	exact, _ := b.Subscribe("orders.created")
+
+	_, delivered, _, err := b.Publish("orders.created", []byte("a"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if delivered != 3 {
+		t.Fatalf("orders.created should reach all 3 subs, delivered=%d", delivered)
+	}
+	recv(t, one)
+	recv(t, all)
+	recv(t, exact)
+
+	// two levels deep: only the > subscription matches
+	_, delivered, _, _ = b.Publish("orders.eu.created", []byte("b"))
+	if delivered != 1 {
+		t.Fatalf("delivered=%d, want 1", delivered)
+	}
+	if string(recv(t, all).Data) != "b" {
+		t.Fatal("wrong message")
+	}
+	select {
+	case <-one.C():
+		t.Fatal("orders.* shouldn't match orders.eu.created")
+	default:
+	}
+}
+
+func TestWildcardErrors(t *testing.T) {
+	b := New(Options{})
+	if _, err := b.Subscribe("orders.>.x"); err != ErrBadPattern {
+		t.Fatalf("got %v", err)
+	}
+	if _, _, _, err := b.Publish("orders.*", nil); err != ErrWildcardInPub {
+		t.Fatalf("got %v", err)
+	}
+}
+
+func TestWildcardCloseCleansUp(t *testing.T) {
+	b := New(Options{})
+	s, _ := b.Subscribe("orders.*")
+	if len(b.Topics()) != 1 {
+		t.Fatal("pattern should show up in Topics")
+	}
+	s.Close()
+	if len(b.Topics()) != 0 {
+		t.Fatal("pattern should be gone after Close")
+	}
+}

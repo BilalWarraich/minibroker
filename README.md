@@ -29,6 +29,25 @@ ctrl+c the broker shuts down gracefully and tells the remaining subscriber why.*
 - When the client disconnects, the stream ctx is cancelled and the subscription is cleaned up.
 - On SIGTERM: health goes to NOT_SERVING, broker closes (which ends all streams), then `GracefulStop`.
 
+### Wildcards
+
+Subjects are dot separated (`orders.eu.created`) and subscriptions can use NATS-style wildcards:
+
+| pattern | matches | doesn't match |
+|---|---|---|
+| `orders.*` | `orders.created` | `orders.eu.created`, `orders` |
+| `orders.>` | `orders.created`, `orders.eu.created` | `orders` |
+| `*.created` | `orders.created`, `payments.created` | `orders.eu.created` |
+
+`*` is exactly one token, `>` is one or more and only allowed at the end. You can't publish
+to a wildcard subject. Every publish checks all wildcard patterns, which is fine for a few
+of them but wouldn't scale to thousands (a trie would).
+
+```
+mbctl sub 'orders.>'
+mbctl pub orders.eu.created hello
+```
+
 Also has:
 - logging + bearer token auth interceptors (unary and stream)
 - grpc health service and reflection, so `grpcurl` works
@@ -111,6 +130,5 @@ make test
 
 ## Maybe later
 
-- wildcard topics (`orders.*`)
 - replay last N messages for new subscribers
 - metrics (msgs/sec, drops per topic)

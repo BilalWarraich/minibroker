@@ -35,7 +35,10 @@ type Broker struct {
 
 	mu     sync.RWMutex
 	topics map[string]*topic
-	closed bool
+	// wildcard subscriptions ("orders.*"), keyed by pattern. Publish has to check
+	// every one of these, fine for a handful, wouldn't scale to thousands
+	patterns map[string]*topic
+	closed   bool
 
 	nextSubID atomic.Uint64
 	nextMsgID atomic.Uint64
@@ -54,8 +57,9 @@ func New(opts Options) *Broker {
 		opts.MaxDrops = 100
 	}
 	return &Broker{
-		opts:   opts,
-		topics: make(map[string]*topic),
+		opts:     opts,
+		topics:   make(map[string]*topic),
+		patterns: make(map[string]*topic),
 	}
 }
 
@@ -65,7 +69,8 @@ type Subscription struct {
 	t      *topic
 	ch     chan Message
 	b      *Broker
-	drops  int // consecutive, guarded by t.mu
+	wild   bool // lives in b.patterns instead of b.topics
+	drops  int  // consecutive, guarded by t.mu
 	kicked bool
 	once   sync.Once
 }
@@ -93,21 +98,36 @@ func (s *Subscription) Close() {
 	s.t.mu.Unlock()
 
 	// only drop the topic if it's still the one we belong to
-	if empty && b.topics[s.topic] == s.t {
-		delete(b.topics, s.topic)
+	m := b.topicMap(s.wild)
+	if empty && m[s.topic] == s.t {
+		delete(m, s.topic)
 	}
 }
 
+func (b *Broker) topicMap(wild bool) map[string]*topic {
+	if wild {
+		return b.patterns
+	}
+	return b.topics
+}
+
+// Subscribe to an exact subject ("orders.created") or a pattern ("orders.*", "orders.>").
 func (b *Broker) Subscribe(name string) (*Subscription, error) {
+	wild := isPattern(name)
+	if wild && !validPattern(name) {
+		return nil, ErrBadPattern
+	}
+
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	if b.closed {
 		return nil, ErrClosed
 	}
-	t := b.topics[name]
+	m := b.topicMap(wild)
+	t := m[name]
 	if t == nil {
 		t = &topic{subs: make(map[uint64]*Subscription)}
-		b.topics[name] = t
+		m[name] = t
 	}
 	s := &Subscription{
 		id:    b.nextSubID.Add(1),
@@ -115,6 +135,7 @@ func (b *Broker) Subscribe(name string) (*Subscription, error) {
 		t:     t,
 		ch:    make(chan Message, b.opts.BufferSize),
 		b:     b,
+		wild:  wild,
 	}
 	t.mu.Lock()
 	t.subs[s.id] = s
@@ -131,6 +152,9 @@ func (t *topic) remove(s *Subscription) {
 // Publish never blocks on a slow subscriber. If a subscriber's buffer is full the
 // message is dropped for that subscriber only.
 func (b *Broker) Publish(name string, data []byte) (msg Message, delivered, dropped int, err error) {
+	if isPattern(name) {
+		return msg, 0, 0, ErrWildcardInPub
+	}
 	msg = Message{
 		ID:          b.nextMsgID.Add(1),
 		Topic:       name,
@@ -143,11 +167,26 @@ func (b *Broker) Publish(name string, data []byte) (msg Message, delivered, drop
 	if b.closed {
 		return msg, 0, 0, ErrClosed
 	}
-	t := b.topics[name]
-	if t == nil {
-		return msg, 0, 0, nil
-	}
 
+	if t := b.topics[name]; t != nil {
+		d, dr := t.deliver(msg, b.opts.MaxDrops)
+		delivered += d
+		dropped += dr
+	}
+	for pattern, t := range b.patterns {
+		if match(pattern, name) {
+			d, dr := t.deliver(msg, b.opts.MaxDrops)
+			delivered += d
+			dropped += dr
+		}
+	}
+	return msg, delivered, dropped, nil
+}
+
+// deliver does a non-blocking send to every subscriber of t.
+// A kicked subscriber can leave t empty, it stays in the map until the next
+// Close cleans it up, Topics() just skips it. Not worth the write lock here.
+func (t *topic) deliver(msg Message, maxDrops int) (delivered, dropped int) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	for _, s := range t.subs {
@@ -158,16 +197,14 @@ func (b *Broker) Publish(name string, data []byte) (msg Message, delivered, drop
 		default:
 			s.drops++
 			dropped++
-			if s.drops >= b.opts.MaxDrops {
+			if s.drops >= maxDrops {
 				// deleting from a map while ranging over it is fine in go
 				s.kicked = true
 				t.remove(s)
 			}
 		}
 	}
-	// a kicked-empty topic stays in the map until the next Close/Subscribe cleanup,
-	// Topics() just skips it. not worth taking the write lock here for that.
-	return msg, delivered, dropped, nil
+	return delivered, dropped
 }
 
 type TopicInfo struct {
@@ -178,13 +215,15 @@ type TopicInfo struct {
 func (b *Broker) Topics() []TopicInfo {
 	b.mu.RLock()
 	defer b.mu.RUnlock()
-	out := make([]TopicInfo, 0, len(b.topics))
-	for name, t := range b.topics {
-		t.mu.Lock()
-		n := len(t.subs)
-		t.mu.Unlock()
-		if n > 0 {
-			out = append(out, TopicInfo{name, n})
+	out := make([]TopicInfo, 0, len(b.topics)+len(b.patterns))
+	for _, m := range []map[string]*topic{b.topics, b.patterns} {
+		for name, t := range m {
+			t.mu.Lock()
+			n := len(t.subs)
+			t.mu.Unlock()
+			if n > 0 {
+				out = append(out, TopicInfo{name, n})
+			}
 		}
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].Name < out[j].Name })
@@ -199,12 +238,14 @@ func (b *Broker) Close() {
 		return
 	}
 	b.closed = true
-	for name, t := range b.topics {
-		t.mu.Lock()
-		for _, s := range t.subs {
-			t.remove(s)
+	for _, m := range []map[string]*topic{b.topics, b.patterns} {
+		for name, t := range m {
+			t.mu.Lock()
+			for _, s := range t.subs {
+				t.remove(s)
+			}
+			t.mu.Unlock()
+			delete(m, name)
 		}
-		t.mu.Unlock()
-		delete(b.topics, name)
 	}
 }
